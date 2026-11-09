@@ -11,6 +11,7 @@
 class PrivateRelay {
   mesh::PrivateRelayLists _lists;
   uint8_t _switch_on;        // operator switch ("private on")
+  uint16_t _timed_min_left;  // "private on <minutes>": minutes left; never saved, so a restart is public
   uint16_t _auto_below_mv;   // 0 = no automatic switching
   bool _auto_active;
   uint16_t _last_batt_mv;
@@ -30,12 +31,13 @@ class PrivateRelay {
 public:
   PrivateRelay();
 
-  bool isActive() const { return _switch_on || _auto_active; }
+  bool isActive() const { return _switch_on || _auto_active || _timed_min_left > 0; }
 
   /** Called from allowPacketForward() after the stock checks. true = may forward. */
   bool allowForward(const mesh::Packet* pkt);
 
-  /** Called about once a minute with the battery reading (mV, 0 = unknown). */
+  /** Called about once a minute with the battery reading (mV, 0 = unknown); also counts down a
+   *  timed private window. */
   void tick(uint16_t batt_mv);
 
   /** Called for every advert whose signature checked out (any type, any hop count). */

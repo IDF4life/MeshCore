@@ -8,6 +8,7 @@
 PrivateRelay::PrivateRelay() {
   _lists.clear();
   _switch_on = 0;
+  _timed_min_left = 0;
   _auto_below_mv = 0;
   _auto_active = false;
   _last_batt_mv = 0;
@@ -59,6 +60,7 @@ bool PrivateRelay::allowForward(const mesh::Packet* pkt) {
 }
 
 void PrivateRelay::tick(uint16_t batt_mv) {
+  if (_timed_min_left > 0) _timed_min_left--;   // called once a minute
   if (batt_mv > 0) _last_batt_mv = batt_mv;
   _auto_active = mesh::privateAutoState(_auto_active, batt_mv, _auto_below_mv);
 }
@@ -147,8 +149,12 @@ void PrivateRelay::handleCommand(const char* args, char* reply, FILESYSTEM* fs) 
     } else {
       strcpy(autobuf, "auto off");
     }
+    char swbuf[24];
+    if (_switch_on) strcpy(swbuf, "on");
+    else if (_timed_min_left) sprintf(swbuf, "timed %umin left", _timed_min_left);
+    else strcpy(swbuf, "off");
     sprintf(reply, "private %s (switch %s, %s) approved %d chans %d fwd %lu drop %lu",
-            isActive() ? "ON" : "OFF", _switch_on ? "on" : "off", autobuf, _lists.num_approved,
+            isActive() ? "ON" : "OFF", swbuf, autobuf, _lists.num_approved,
             _lists.num_channels, (unsigned long)fwd, (unsigned long)drop);
     return;
   }
@@ -157,10 +163,23 @@ void PrivateRelay::handleCommand(const char* args, char* reply, FILESYSTEM* fs) 
       strcpy(reply, "Err - approve radios or add a team channel first");
       return;
     }
-    _switch_on = 1; changed = true;
+    const char* m = skipSpaces(a + 2);
+    if (*m) {
+      // "private on 15": private for that many minutes, then public again by itself. Not saved:
+      // a restart during the window comes back public (ChatGPT 11-09, first outdoor trial).
+      int mins = atoi(m);
+      if (mins < 1 || mins > 1440) {
+        strcpy(reply, "Err - minutes must be 1-1440 (or plain 'private on')");
+        return;
+      }
+      _timed_min_left = (uint16_t)mins;
+      sprintf(reply, "OK - private ON for %d min (public again after, or after a restart)", mins);
+      return;
+    }
+    _switch_on = 1; _timed_min_left = 0; changed = true;
     strcpy(reply, "OK - private ON");
   } else if (startsWord(a, "off")) {
-    _switch_on = 0; changed = true;
+    _switch_on = 0; _timed_min_left = 0; changed = true;
     strcpy(reply, _auto_active ? "OK - switch off (auto still ON: low battery)" : "OK - private OFF");
   } else if (startsWord(a, "auto")) {
     int mv = atoi(skipSpaces(a + 4));
@@ -262,7 +281,7 @@ void PrivateRelay::handleCommand(const char* args, char* reply, FILESYSTEM* fs) 
     }
     return;
   } else {
-    strcpy(reply, "Err - private [on|off|auto <mV>|heard|approve <name|key>|remove <hex>|list|channel add <hex>|stats]");
+    strcpy(reply, "Err - private [on [min]|off|auto <mV>|heard|approve <name|key>|remove <hex>|list|channel add <hex>|stats]");
     return;
   }
 
