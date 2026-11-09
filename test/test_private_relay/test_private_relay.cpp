@@ -121,3 +121,8 @@ TEST(PrivateRelay, AutoOnLowBatteryWithHysteresis) {
   EXPECT_TRUE(privateAutoState(true, 0, 3600));            // unknown reading: unchanged
   EXPECT_FALSE(privateAutoState(false, 0, 3600));
 }
+
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}
