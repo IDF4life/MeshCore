@@ -12,14 +12,15 @@
  * battery. It is load shedding, not access control:
  *  - team channel packets (GRP_TXT / GRP_DATA): channel hash and MAC checked against the team
  *    channel secrets this repeater holds - strong;
- *  - adverts: the full public key must be on the approved list - strong (the advert signature is
- *    already verified by Mesh before forwarding);
+ *  - flood adverts: the full public key must be on the approved list - strong (Mesh forwards an
+ *    advert only after verifying its signature); direct-routed adverts are not forwarded;
  *  - TXT_MSG, REQ, RESPONSE, PATH: forwarded when the 1-byte destination or source hash matches an
  *    approved radio - LOOSE (1-byte hashes collide: with 8 approved radios roughly 6% of strangers'
  *    packets of these types also match);
  *  - ANON_REQ (logins): destination hash must match an approved radio (eg. another IDF repeater);
- *  - ACK, MULTIPART: always forwarded (tiny, and carry nothing to recognise; dropping them would
- *    break delivery confirmations of team messages);
+ *  - ACK and multipart ACK: always forwarded when well formed (tiny, nothing to recognise; dropping
+ *    them would break delivery confirmations of team messages and cause resends);
+ *  - payload versions other than 1: not forwarded (their hash layout is not known here);
  *  - everything else (TRACE, CONTROL, RAW_CUSTOM, reserved): not forwarded.
  * Packets addressed to this repeater itself (logins, admin commands) are handled before forwarding
  * and are never affected.
@@ -89,9 +90,17 @@ inline PrivateVerdict privateRelayVerdict(const Packet* pkt, const PrivateRelayL
                                           GroupMacCheck mac_ok) {
   const uint8_t* p = pkt->payload;
   int len = pkt->payload_len;
+  // Only payload version 1 (1-byte hashes, 2-byte MAC) is understood; never guess at others.
+  if (pkt->getPayloadVer() != 0) return PV_DROP_TYPE;
   switch (pkt->getPayloadType()) {
     case PAYLOAD_TYPE_ADVERT:
-      if (len >= PUB_KEY_SIZE && lists.findApproved(p, PUB_KEY_SIZE) >= 0) return PV_APPROVED_ADVERT;
+      // Flood adverts are forwarded by Mesh only after their signature checks out (Mesh.cpp
+      // onRecvPacket -> routeRecvPacket). A direct-routed advert skips that check, so it is never
+      // forwarded in private mode (adverts are not normally sent direct).
+      if (pkt->isRouteFlood() && len >= PUB_KEY_SIZE + 4 + SIGNATURE_SIZE
+          && lists.findApproved(p, PUB_KEY_SIZE) >= 0) {
+        return PV_APPROVED_ADVERT;
+      }
       return PV_DROP_ADVERT;
 
     case PAYLOAD_TYPE_GRP_TXT:
@@ -117,8 +126,11 @@ inline PrivateVerdict privateRelayVerdict(const Packet* pkt, const PrivateRelayL
       return PV_DROP_HASH;
 
     case PAYLOAD_TYPE_ACK:
+      return len >= 4 ? PV_ALWAYS : PV_DROP_TYPE;
+
     case PAYLOAD_TYPE_MULTIPART:
-      return PV_ALWAYS;
+      // only multipart ACKs (the one multipart kind MeshCore defines today)
+      return (len >= 5 && (p[0] & 0x0F) == PAYLOAD_TYPE_ACK) ? PV_ALWAYS : PV_DROP_TYPE;
 
     default:
       return PV_DROP_TYPE;

@@ -46,11 +46,17 @@ TEST(PrivateRelay, TeamChannelNeedsHashAndMac) {
 TEST(PrivateRelay, AdvertNeedsFullApprovedKey) {
   auto l = lists();
   Packet a; a.header = ROUTE_TYPE_FLOOD | (PAYLOAD_TYPE_ADVERT << PH_TYPE_SHIFT);
-  memset(a.payload, 0x37, PUB_KEY_SIZE); a.payload_len = PUB_KEY_SIZE + 70;
+  memset(a.payload, 0x37, PUB_KEY_SIZE); a.payload_len = PUB_KEY_SIZE + 4 + SIGNATURE_SIZE + 6;
   EXPECT_EQ(PV_APPROVED_ADVERT, privateRelayVerdict(&a, l, macAcceptsTeam));
+  a.header = ROUTE_TYPE_TRANSPORT_FLOOD | (PAYLOAD_TYPE_ADVERT << PH_TYPE_SHIFT);
+  EXPECT_EQ(PV_APPROVED_ADVERT, privateRelayVerdict(&a, l, macAcceptsTeam));
+  a.header = ROUTE_TYPE_DIRECT | (PAYLOAD_TYPE_ADVERT << PH_TYPE_SHIFT);   // skips signature check
+  EXPECT_EQ(PV_DROP_ADVERT, privateRelayVerdict(&a, l, macAcceptsTeam));
+  a.header = ROUTE_TYPE_FLOOD | (PAYLOAD_TYPE_ADVERT << PH_TYPE_SHIFT);
   a.payload[31] = 0x38;  // same first byte, different key: not approved
   EXPECT_EQ(PV_DROP_ADVERT, privateRelayVerdict(&a, l, macAcceptsTeam));
-  a.payload_len = 10;
+  memset(a.payload, 0x37, PUB_KEY_SIZE);
+  a.payload_len = PUB_KEY_SIZE + 10;  // too short to carry a signature
   EXPECT_EQ(PV_DROP_ADVERT, privateRelayVerdict(&a, l, macAcceptsTeam));
 }
 
@@ -73,15 +79,29 @@ TEST(PrivateRelay, PeerPacketsByDestOrSrcHash) {
 TEST(PrivateRelay, AcksAlwaysOthersNever) {
   auto l = lists();
   auto ack = pkt(PAYLOAD_TYPE_ACK, {1, 2, 3, 4});
-  auto multi = pkt(PAYLOAD_TYPE_MULTIPART, {1, 2, 3, 4, 5});
+  auto short_ack = pkt(PAYLOAD_TYPE_ACK, {1, 2});
+  auto multi_ack = pkt(PAYLOAD_TYPE_MULTIPART, {(2 << 4) | PAYLOAD_TYPE_ACK, 2, 3, 4, 5});
+  auto multi_other = pkt(PAYLOAD_TYPE_MULTIPART, {(2 << 4) | PAYLOAD_TYPE_TXT_MSG, 2, 3, 4, 5});
   EXPECT_EQ(PV_ALWAYS, privateRelayVerdict(&ack, l, macAcceptsTeam));
-  EXPECT_EQ(PV_ALWAYS, privateRelayVerdict(&multi, l, macAcceptsTeam));
+  EXPECT_EQ(PV_DROP_TYPE, privateRelayVerdict(&short_ack, l, macAcceptsTeam));
+  EXPECT_EQ(PV_ALWAYS, privateRelayVerdict(&multi_ack, l, macAcceptsTeam));
+  EXPECT_EQ(PV_DROP_TYPE, privateRelayVerdict(&multi_other, l, macAcceptsTeam));
   for (uint8_t t : {PAYLOAD_TYPE_TRACE, PAYLOAD_TYPE_CONTROL, PAYLOAD_TYPE_RAW_CUSTOM, 0x0C}) {
     auto p = pkt(t, {0x37, 0xC6, 0, 0});
     EXPECT_EQ(PV_DROP_TYPE, privateRelayVerdict(&p, l, macAcceptsTeam));
   }
   EXPECT_TRUE(privateVerdictForwards(PV_ALWAYS));
   EXPECT_FALSE(privateVerdictForwards(PV_DROP_CHANNEL));
+}
+
+TEST(PrivateRelay, UnknownPayloadVersionNeverForwarded) {
+  auto l = lists();
+  auto txt = pkt(PAYLOAD_TYPE_TXT_MSG, {0x37, 0xC6, 0, 0});
+  txt.header |= (1 << PH_VER_SHIFT);  // payload version 2
+  EXPECT_EQ(PV_DROP_TYPE, privateRelayVerdict(&txt, l, macAcceptsTeam));
+  auto ack = pkt(PAYLOAD_TYPE_ACK, {1, 2, 3, 4});
+  ack.header |= (2 << PH_VER_SHIFT);
+  EXPECT_EQ(PV_DROP_TYPE, privateRelayVerdict(&ack, l, macAcceptsTeam));
 }
 
 TEST(PrivateRelay, EmptyListsForwardOnlyAcks) {
