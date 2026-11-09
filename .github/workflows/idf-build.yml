@@ -25,7 +25,7 @@ jobs:
 
       - name: Build RAK4631 repeater
         env:
-          FIRMWARE_VERSION: idf-${{ github.sha }}
+          FIRMWARE_VERSION: v1.18.0-idf1
         run: sh build.sh build-firmware RAK_4631_repeater
 
       - name: Upload firmware
