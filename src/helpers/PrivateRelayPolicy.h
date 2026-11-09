@@ -17,7 +17,9 @@
  *  - TXT_MSG, REQ, RESPONSE, PATH: forwarded when the 1-byte destination or source hash matches an
  *    approved radio - LOOSE (1-byte hashes collide: with 8 approved radios roughly 6% of strangers'
  *    packets of these types also match);
- *  - ANON_REQ (logins): destination hash must match an approved radio (eg. another IDF repeater);
+ *  - ANON_REQ (logins, repeater health checks): from an approved radio (full sender key in the
+ *    packet) or to an approved radio (destination hash) - so team radios can still log in to and
+ *    check any repeater, and other IDF repeaters can be reached once approved;
  *  - ACK and multipart ACK: always forwarded when well formed (tiny, nothing to recognise; dropping
  *    them would break delivery confirmations of team messages and cause resends);
  *  - payload versions other than 1: not forwarded (their hash layout is not known here);
@@ -122,6 +124,13 @@ inline PrivateVerdict privateRelayVerdict(const Packet* pkt, const PrivateRelayL
       return PV_DROP_HASH;
 
     case PAYLOAD_TYPE_ANON_REQ:
+      // [dest hash][sender's full public key][MAC + data]: a login or other anonymous request.
+      // Passed when it is FROM an approved radio (eg. IDF1 asking any repeater, ours or not, for
+      // its battery) or TO an approved radio (eg. a login to another IDF repeater).
+      if (len >= 1 + PUB_KEY_SIZE + CIPHER_MAC_SIZE
+          && lists.findApproved(&p[1], PUB_KEY_SIZE) >= 0) {
+        return PV_APPROVED_HASH;
+      }
       if (len >= 1 && lists.hashApproved(p[0])) return PV_APPROVED_HASH;
       return PV_DROP_HASH;
 

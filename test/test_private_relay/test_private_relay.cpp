@@ -71,9 +71,19 @@ TEST(PrivateRelay, PeerPacketsByDestOrSrcHash) {
     EXPECT_EQ(PV_DROP_HASH, privateRelayVerdict(&strangers, l, macAcceptsTeam));
   }
   auto login_ours = pkt(PAYLOAD_TYPE_ANON_REQ, {0xC6, 1, 2});
-  auto login_other = pkt(PAYLOAD_TYPE_ANON_REQ, {0x29, 0xC6, 2});  // dest only counts
   EXPECT_EQ(PV_APPROVED_HASH, privateRelayVerdict(&login_ours, l, macAcceptsTeam));
-  EXPECT_EQ(PV_DROP_HASH, privateRelayVerdict(&login_other, l, macAcceptsTeam));
+  // IDF1 (approved, full key 37..37) logging in to a repeater that is not approved (IDF8R, 29..):
+  Packet login_from_team; login_from_team.header = ROUTE_TYPE_FLOOD | (PAYLOAD_TYPE_ANON_REQ << PH_TYPE_SHIFT);
+  login_from_team.payload[0] = 0x29;
+  memset(&login_from_team.payload[1], 0x37, PUB_KEY_SIZE);
+  login_from_team.payload_len = 1 + PUB_KEY_SIZE + CIPHER_MAC_SIZE + 16;
+  EXPECT_EQ(PV_APPROVED_HASH, privateRelayVerdict(&login_from_team, l, macAcceptsTeam));
+  // a stranger (key 55..55) logging in to a repeater that is not approved: dropped
+  memset(&login_from_team.payload[1], 0x55, PUB_KEY_SIZE);
+  EXPECT_EQ(PV_DROP_HASH, privateRelayVerdict(&login_from_team, l, macAcceptsTeam));
+  // a stranger whose key merely starts with an approved byte: dropped (full key compared)
+  login_from_team.payload[1] = 0x37;
+  EXPECT_EQ(PV_DROP_HASH, privateRelayVerdict(&login_from_team, l, macAcceptsTeam));
 }
 
 TEST(PrivateRelay, AcksAlwaysOthersNever) {
