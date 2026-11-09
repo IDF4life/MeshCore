@@ -6,13 +6,7 @@
 #include <Mesh.h>
 #include <helpers/PrivateRelayPolicy.h>
 
-#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
-  #include <InternalFileSystem.h>
-#elif defined(RP2040_PLATFORM)
-  #include <LittleFS.h>
-#elif defined(ESP32)
-  #include <SPIFFS.h>
-#endif
+#include <helpers/IdentityStore.h>   // defines FILESYSTEM (and File) for each platform
 
 class PrivateRelay {
   mesh::PrivateRelayLists _lists;
