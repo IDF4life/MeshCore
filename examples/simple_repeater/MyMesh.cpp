@@ -455,6 +455,11 @@ bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
       return false;
     }
   }
+  // IDF private relay: when active, forward only recognised team traffic (stock behaviour when off)
+  if (!private_relay.allowForward(packet)) {
+    MESH_DEBUG_PRINTLN("allowPacketForward: private relay, not team traffic");
+    return false;
+  }
   return true;
 }
 
@@ -882,6 +887,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _logging = false;
   region_load_active = false;
   recv_pkt_region = NULL;
+  next_private_tick = 0;
 
 #if MAX_NEIGHBOURS
   memset(neighbours, 0, sizeof(neighbours));
@@ -950,6 +956,7 @@ void MyMesh::begin(FILESYSTEM *fs) {
   acl.load(_fs, self_id);
   // TODO: key_store.begin();
   region_map.load(_fs);
+  private_relay.load(_fs);
 
   // establish default-scope
   {
@@ -1281,6 +1288,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
+  } else if (memcmp(command, "private", 7) == 0 && (command[7] == 0 || command[7] == ' ')) {
+    private_relay.handleCommand(&command[7], reply, _fs);   // IDF private relay (admin only)
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
@@ -1317,6 +1326,11 @@ void MyMesh::loop() {
     revert_radio_at = 0;                                        // clear timer
     radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
     MESH_DEBUG_PRINTLN("Radio params restored");
+  }
+
+  if (millisHasNowPassed(next_private_tick)) {   // IDF private relay: automatic low-battery mode
+    private_relay.tick(board.getBattMilliVolts());
+    next_private_tick = futureMillis(60000);
   }
 
   // is pending dirty contacts write needed?

@@ -4,6 +4,7 @@
 #include <Mesh.h>
 #include <RTClib.h>
 #include <target.h>
+#include "PrivateRelay.h"
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   #include <InternalFileSystem.h>
@@ -94,6 +95,8 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   RegionMap region_map, temp_map;
   RegionEntry* load_stack[8];
   RegionEntry* recv_pkt_region;
+  PrivateRelay private_relay;     // IDF: selective forwarding, off by default
+  unsigned long next_private_tick;
   TransportKey default_scope;
   RateLimiter discover_limiter, anon_limiter;
   uint32_t pending_discover_tag;
