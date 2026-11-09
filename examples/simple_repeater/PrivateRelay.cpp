@@ -12,6 +12,37 @@ PrivateRelay::PrivateRelay() {
   _auto_active = false;
   _last_batt_mv = 0;
   memset(_counts, 0, sizeof(_counts));
+  memset(_heard, 0, sizeof(_heard));
+  _heard_seq = 0;
+}
+
+void PrivateRelay::noteAdvert(const uint8_t* pub_key, const char* name) {
+  int slot = 0;
+  for (int i = 0; i < HEARD_MAX; i++) {
+    if (_heard[i].seq && memcmp(_heard[i].key, pub_key, PUB_KEY_SIZE) == 0) { slot = i; break; }
+    if (_heard[i].seq < _heard[slot].seq) slot = i;   // oldest (or empty) slot
+  }
+  memcpy(_heard[slot].key, pub_key, PUB_KEY_SIZE);
+  memset(_heard[slot].name, 0, sizeof(_heard[slot].name));
+  if (name) strncpy(_heard[slot].name, name, sizeof(_heard[slot].name) - 1);
+  _heard[slot].seq = ++_heard_seq;
+}
+
+const PrivateRelay::Heard* PrivateRelay::findHeard(const char* q) const {
+  int ql = strlen(q);
+  uint8_t pre[PUB_KEY_SIZE];
+  bool hex = ql >= 6 && ql <= PUB_KEY_SIZE * 2 && (ql & 1) == 0 && mesh::Utils::fromHex(pre, ql / 2, q);
+  const Heard* found = NULL;
+  for (int i = 0; i < HEARD_MAX; i++) {
+    const Heard* h = &_heard[i];
+    if (!h->seq) continue;
+    bool match = strcmp(h->name, q) == 0 || (hex && memcmp(h->key, pre, ql / 2) == 0);
+    if (match) {
+      if (found && memcmp(found->key, h->key, PUB_KEY_SIZE) != 0) return NULL;  // ambiguous
+      found = h;
+    }
+  }
+  return found;
 }
 
 bool PrivateRelay::groupMacOk(const uint8_t* secret, const uint8_t* mac_and_data, int len) {
@@ -143,9 +174,15 @@ void PrivateRelay::handleCommand(const char* args, char* reply, FILESYSTEM* fs) 
   } else if (startsWord(a, "approve")) {
     const char* hex = skipSpaces(a + 7);
     uint8_t key[PUB_KEY_SIZE];
-    if (strlen(hex) != PUB_KEY_SIZE * 2 || !mesh::Utils::fromHex(key, PUB_KEY_SIZE, hex)) {
-      strcpy(reply, "Err - give the full 64-hex-digit public key");
-      return;
+    if (strlen(hex) == PUB_KEY_SIZE * 2 && mesh::Utils::fromHex(key, PUB_KEY_SIZE, hex)) {
+      // full key given
+    } else {
+      const Heard* h = findHeard(hex);   // a radio heard recently, by name or key prefix
+      if (h == NULL) {
+        strcpy(reply, "Err - not heard (see 'private heard'), ambiguous, or give the full 64-hex key");
+        return;
+      }
+      memcpy(key, h->key, PUB_KEY_SIZE);
     }
     if (_lists.findApproved(key, PUB_KEY_SIZE) >= 0) {
       strcpy(reply, "OK - already approved");
@@ -173,6 +210,15 @@ void PrivateRelay::handleCommand(const char* args, char* reply, FILESYSTEM* fs) 
     for (int j = i; j < _lists.num_approved - 1; j++) memcpy(_lists.approved[j], _lists.approved[j + 1], PUB_KEY_SIZE);
     _lists.num_approved--; changed = true;
     sprintf(reply, "OK - removed (%d left)", _lists.num_approved);
+  } else if (startsWord(a, "heard")) {
+    int n = sprintf(reply, "heard:");
+    for (int i = 0; i < HEARD_MAX && n < 130; i++) {
+      if (!_heard[i].seq) continue;
+      bool ok = _lists.findApproved(_heard[i].key, PUB_KEY_SIZE) >= 0;
+      n += snprintf(&reply[n], 150 - n, " %.12s(%02X%02X%02X)%s", _heard[i].name, _heard[i].key[0],
+                    _heard[i].key[1], _heard[i].key[2], ok ? "*" : "");
+    }
+    return;
   } else if (startsWord(a, "list")) {
     list(skipSpaces(a + 4), reply);
     return;
@@ -216,7 +262,7 @@ void PrivateRelay::handleCommand(const char* args, char* reply, FILESYSTEM* fs) 
     }
     return;
   } else {
-    strcpy(reply, "Err - private [on|off|auto <mV>|approve <key>|remove <hex>|list|channel add <hex>|stats]");
+    strcpy(reply, "Err - private [on|off|auto <mV>|heard|approve <name|key>|remove <hex>|list|channel add <hex>|stats]");
     return;
   }
 

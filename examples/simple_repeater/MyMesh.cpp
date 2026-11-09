@@ -656,6 +656,11 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
                           const uint8_t *app_data, size_t app_data_len) {
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len); // chain to super impl
 
+  {  // IDF private relay: remember who was heard, so radios can be approved by name
+    AdvertDataParser named(app_data, app_data_len);
+    private_relay.noteAdvert(id.pub_key, named.isValid() ? named.getName() : "");
+  }
+
   // if this a zero hop advert (and not via 'Share'), add it to neighbours
   if (packet->getPathHashCount() == 0 && !isShare(packet)) {
     AdvertDataParser parser(app_data, app_data_len);
