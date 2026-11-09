@@ -1,0 +1,35 @@
+name: IDF private relay build
+
+# Builds the RAK4631 repeater firmware with the IDF private relay and runs the native unit tests
+# (including test_private_relay) on every push to the idf-* branches. The firmware files (.uf2 and
+# .zip for the RAK) are attached to the run as an artifact.
+
+on:
+  push:
+    branches:
+      - 'idf-*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Unit tests
+        run: pio test -e native -vv
+
+      - name: Build RAK4631 repeater
+        env:
+          FIRMWARE_VERSION: idf-${{ github.sha }}
+        run: sh build.sh build-firmware RAK_4631_repeater
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: idf-rak4631-repeater-${{ github.sha }}
+          path: out/
