@@ -175,11 +175,15 @@ void PrivateRelay::handleCommand(const char* args, char* reply, FILESYSTEM* fs) 
         return;
       }
       _timed_min_left = (uint16_t)mins;
-      sprintf(reply, "OK - private ON for %d min (public again after, or after a restart)", mins);
-      return;
+      if (_switch_on) {            // a timed window replaces a permanent "on" (found 11-09)
+        _switch_on = 0;
+        changed = true;            // saved below: a restart comes back public
+      }
+      sprintf(reply, "OK - private ON for %d min", mins);
+    } else {
+      _switch_on = 1; _timed_min_left = 0; changed = true;
+      strcpy(reply, "OK - private ON");
     }
-    _switch_on = 1; _timed_min_left = 0; changed = true;
-    strcpy(reply, "OK - private ON");
   } else if (startsWord(a, "off")) {
     _switch_on = 0; _timed_min_left = 0; changed = true;
     strcpy(reply, _auto_active ? "OK - switch off (auto still ON: low battery)" : "OK - private OFF");
