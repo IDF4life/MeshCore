@@ -8,6 +8,13 @@
 
 #include <helpers/IdentityStore.h>   // defines FILESYSTEM (and File) for each platform
 
+enum PrivateRelaySettingsState : uint8_t {
+  SETTINGS_NONE = 0,         // never saved: public, nothing approved
+  SETTINGS_OK = 1,
+  SETTINGS_FROM_BACKUP = 2,  // main copy was bad; backup used and main rewritten
+  SETTINGS_DAMAGED = 3,      // files existed but neither copy was usable: running public
+};
+
 class PrivateRelay {
   mesh::PrivateRelayLists _lists;
   uint8_t _switch_on;        // operator switch ("private on")
@@ -16,6 +23,7 @@ class PrivateRelay {
   bool _auto_active;
   uint16_t _last_batt_mv;
   uint32_t _counts[mesh::PV_COUNT];
+  PrivateRelaySettingsState _settings_state;
 
   // Radios recently heard by their (signature-checked) adverts, so an operator can approve one
   // by name or key prefix instead of typing 64 hex digits. RAM only.

@@ -15,6 +15,7 @@ PrivateRelay::PrivateRelay() {
   memset(_counts, 0, sizeof(_counts));
   memset(_heard, 0, sizeof(_heard));
   _heard_seq = 0;
+  _settings_state = SETTINGS_NONE;
 }
 
 void PrivateRelay::noteAdvert(const uint8_t* pub_key, const char* name) {
@@ -78,40 +79,101 @@ static File openForWrite(FILESYSTEM* fs, const char* name) {
 #endif
 }
 
-bool PrivateRelay::save(FILESYSTEM* fs) {
-  File f = openForWrite(fs, PRIVATE_RELAY_FILE);
+// Settings are written twice (11-10, Randy: private mode must hold): the main file, then a backup
+// copy, each "IDP2" + settings + a 4-byte SHA-256 check. A power cut while one copy is being
+// written leaves the other whole, so the approved list and the switch survive. Only if both
+// copies are bad does the repeater run public, and 'private' then says so.
+#define PRIVATE_RELAY_FILE2  "/idf_private2"
+#define PRIVATE_RELAY_MAGIC2 0x49445032UL  // "IDP2"
+
+struct PrivateRelayBlob {
+  uint32_t magic;
+  uint8_t switch_on;
+  uint16_t auto_below_mv;
+  mesh::PrivateRelayLists lists;
+} __attribute__((packed));
+
+static void blobCheck(const PrivateRelayBlob& b, uint8_t out[4]) {
+  mesh::Utils::sha256(out, 4, (const uint8_t*)&b, sizeof(b));
+}
+
+static bool writeCopy(FILESYSTEM* fs, const char* name, const PrivateRelayBlob& b) {
+  File f = openForWrite(fs, name);
   if (!f) return false;
-  uint32_t magic = PRIVATE_RELAY_MAGIC;
-  bool ok = f.write((uint8_t*)&magic, sizeof(magic)) == sizeof(magic);
-  ok = ok && f.write(&_switch_on, 1) == 1;
-  ok = ok && f.write((uint8_t*)&_auto_below_mv, sizeof(_auto_below_mv)) == sizeof(_auto_below_mv);
-  ok = ok && f.write((uint8_t*)&_lists, sizeof(_lists)) == sizeof(_lists);
+  uint8_t chk[4];
+  blobCheck(b, chk);
+  bool ok = f.write((const uint8_t*)&b, sizeof(b)) == sizeof(b);
+  ok = ok && f.write(chk, 4) == 4;
   f.close();
   return ok;
 }
 
-bool PrivateRelay::load(FILESYSTEM* fs) {
-  if (!fs->exists(PRIVATE_RELAY_FILE)) return false;
+bool PrivateRelay::save(FILESYSTEM* fs) {
+  PrivateRelayBlob b;
+  memset(&b, 0, sizeof(b));
+  b.magic = PRIVATE_RELAY_MAGIC2;
+  b.switch_on = _switch_on;
+  b.auto_below_mv = _auto_below_mv;
+  b.lists = _lists;
+  bool main_ok = writeCopy(fs, PRIVATE_RELAY_FILE, b);
+  bool backup_ok = writeCopy(fs, PRIVATE_RELAY_FILE2, b);   // after the main copy, never at once
+  if (main_ok && backup_ok) _settings_state = SETTINGS_OK;
+  return main_ok && backup_ok;
+}
+
+static File openForRead(FILESYSTEM* fs, const char* name) {
 #if defined(RP2040_PLATFORM)
-  File f = fs->open(PRIVATE_RELAY_FILE, "r");
+  return fs->open(name, "r");
 #else
-  File f = fs->open(PRIVATE_RELAY_FILE);
+  return fs->open(name);
 #endif
+}
+
+// Reads one copy. Accepts IDP2 (checked) and the older IDP1 (no check; written by builds up to
+// 32341d4), so a repeater flashed with this build keeps its settings.
+static bool readCopy(FILESYSTEM* fs, const char* name, PrivateRelayBlob& out) {
+  if (!fs->exists(name)) return false;
+  File f = openForRead(fs, name);
   if (!f) return false;
-  uint32_t magic = 0;
-  uint8_t sw = 0;
-  uint16_t mv = 0;
-  mesh::PrivateRelayLists l;
-  bool ok = f.read((uint8_t*)&magic, sizeof(magic)) == sizeof(magic) && magic == PRIVATE_RELAY_MAGIC;
-  ok = ok && f.read(&sw, 1) == 1;
-  ok = ok && f.read((uint8_t*)&mv, sizeof(mv)) == sizeof(mv);
-  ok = ok && f.read((uint8_t*)&l, sizeof(l)) == sizeof(l);
+  PrivateRelayBlob b;
+  memset(&b, 0, sizeof(b));
+  bool ok = f.read((uint8_t*)&b, sizeof(b)) == sizeof(b);
+  if (ok && b.magic == PRIVATE_RELAY_MAGIC2) {
+    uint8_t chk[4], want[4];
+    ok = f.read(chk, 4) == 4;
+    blobCheck(b, want);
+    ok = ok && memcmp(chk, want, 4) == 0;
+  } else if (ok) {
+    ok = b.magic == PRIVATE_RELAY_MAGIC;   // IDP1: same layout, no check bytes
+  }
   f.close();
-  // A damaged or unknown file leaves the repeater public (stock behaviour), never half private.
-  if (!ok || l.num_approved > PRIVATE_MAX_APPROVED || l.num_channels > PRIVATE_MAX_CHANNELS) return false;
-  _switch_on = sw ? 1 : 0;
-  _auto_below_mv = mv;
-  _lists = l;
+  ok = ok && b.lists.num_approved <= PRIVATE_MAX_APPROVED
+          && b.lists.num_channels <= PRIVATE_MAX_CHANNELS;
+  if (ok) out = b;
+  return ok;
+}
+
+bool PrivateRelay::load(FILESYSTEM* fs) {
+  bool any = fs->exists(PRIVATE_RELAY_FILE) || fs->exists(PRIVATE_RELAY_FILE2);
+  PrivateRelayBlob b;
+  if (readCopy(fs, PRIVATE_RELAY_FILE, b)) {
+    _settings_state = SETTINGS_OK;
+  } else if (readCopy(fs, PRIVATE_RELAY_FILE2, b)) {
+    _settings_state = SETTINGS_FROM_BACKUP;
+  } else {
+    // Nothing usable: public (stock behaviour), and 'private' reports it when files existed.
+    _settings_state = any ? SETTINGS_DAMAGED : SETTINGS_NONE;
+    return false;
+  }
+  _switch_on = b.switch_on ? 1 : 0;
+  _auto_below_mv = b.auto_below_mv;
+  _lists = b.lists;
+  if (_settings_state == SETTINGS_FROM_BACKUP || !fs->exists(PRIVATE_RELAY_FILE2)) {
+    // Repair: rewrite both copies (also turns an old IDP1 file into two checked copies).
+    PrivateRelaySettingsState was = _settings_state;
+    save(fs);
+    _settings_state = was;   // keep "restored from backup" visible until the next change
+  }
   return true;
 }
 
@@ -158,6 +220,11 @@ void PrivateRelay::handleCommand(const char* args, char* reply, FILESYSTEM* fs) 
     sprintf(reply, "private %s (switch %s, %s) approved %d chans %d fwd %lu drop %lu",
             isActive() ? "ON" : "OFF", swbuf, autobuf, _lists.num_approved,
             _lists.num_channels, (unsigned long)fwd, (unsigned long)drop);
+    if (_settings_state == SETTINGS_DAMAGED) {
+      strcat(reply, " !SETTINGS DAMAGED-public");
+    } else if (_settings_state == SETTINGS_FROM_BACKUP) {
+      strcat(reply, " (from backup)");
+    }
     return;
   }
   if (startsWord(a, "on")) {
