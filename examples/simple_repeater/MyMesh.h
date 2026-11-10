@@ -97,6 +97,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   RegionEntry* recv_pkt_region;
   PrivateRelay private_relay;     // IDF: selective forwarding, off by default
   unsigned long next_private_tick;
+  uint32_t private_dropped_air_ms;  // estimated airtime of retransmissions skipped by private mode
   TransportKey default_scope;
   RateLimiter discover_limiter, anon_limiter;
   uint32_t pending_discover_tag;

@@ -458,6 +458,8 @@ bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
   // IDF private relay: when active, forward only recognised team traffic (stock behaviour when off)
   if (!private_relay.allowForward(packet)) {
     MESH_DEBUG_PRINTLN("allowPacketForward: private relay, not team traffic");
+    // estimated airtime of the retransmission skipped (upper estimate: a duplicate can be counted twice)
+    private_dropped_air_ms += _radio->getEstAirtimeFor(packet->getRawLength());
     return false;
   }
   return true;
@@ -893,6 +895,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   region_load_active = false;
   recv_pkt_region = NULL;
   next_private_tick = 0;
+  private_dropped_air_ms = 0;
 
 #if MAX_NEIGHBOURS
   memset(neighbours, 0, sizeof(neighbours));
@@ -1293,6 +1296,14 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
+  } else if (strcmp(command, "private air") == 0) {
+    // IDF private relay: airtime since boot, over the air (stock stats-radio is serial only).
+    // Compare the change between equal-length OFF and ON windows (ChatGPT 11-09).
+    sprintf(reply, "air up %lumin tx %lus rx %lus sent %lu/%lu recv %lu/%lu skipped~%lus",
+            (unsigned long)(_ms->getMillis() / 60000), (unsigned long)(getTotalAirTime() / 1000),
+            (unsigned long)(getReceiveAirTime() / 1000), (unsigned long)getNumSentFlood(),
+            (unsigned long)getNumSentDirect(), (unsigned long)getNumRecvFlood(),
+            (unsigned long)getNumRecvDirect(), (unsigned long)(private_dropped_air_ms / 1000));
   } else if (memcmp(command, "private", 7) == 0 && (command[7] == 0 || command[7] == ' ')) {
     private_relay.handleCommand(&command[7], reply, _fs);   // IDF private relay (admin only)
   } else{

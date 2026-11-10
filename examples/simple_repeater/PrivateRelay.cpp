@@ -291,7 +291,7 @@ void PrivateRelay::handleCommand(const char* args, char* reply, FILESYSTEM* fs) 
     }
     return;
   } else {
-    strcpy(reply, "Err - private [on [min]|off|auto <mV>|heard|approve <name|key>|remove <hex>|list|channel add <hex>|stats]");
+    strcpy(reply, "Err - private [on [min]|off|auto <mV>|heard|approve <name|key>|remove <hex>|list|channel add <hex>|stats|air]");
     return;
   }
 
