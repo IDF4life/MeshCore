@@ -62,7 +62,9 @@ bool PrivateRelay::allowForward(const mesh::Packet* pkt) {
 void PrivateRelay::tick(uint16_t batt_mv) {
   if (_timed_min_left > 0) _timed_min_left--;   // called once a minute
   if (batt_mv > 0) _last_batt_mv = batt_mv;
-  _auto_active = mesh::privateAutoState(_auto_active, batt_mv, _auto_below_mv);
+  // Never go private automatically with nothing approved: it would block every team packet too.
+  bool lists_empty = _lists.num_approved == 0 && _lists.num_channels == 0;
+  _auto_active = lists_empty ? false : mesh::privateAutoState(_auto_active, batt_mv, _auto_below_mv);
 }
 
 static File openForWrite(FILESYSTEM* fs, const char* name) {
@@ -185,6 +187,10 @@ void PrivateRelay::handleCommand(const char* args, char* reply, FILESYSTEM* fs) 
     int mv = atoi(skipSpaces(a + 4));
     if (mv != 0 && (mv < 3000 || mv > 4200)) {
       strcpy(reply, "Err - auto mV must be 0 (off) or 3000-4200");
+      return;
+    }
+    if (mv != 0 && _lists.num_approved == 0 && _lists.num_channels == 0) {
+      strcpy(reply, "Err - approve radios or add a team channel first");
       return;
     }
     _auto_below_mv = (uint16_t)mv; changed = true;
