@@ -16,6 +16,7 @@ PrivateRelay::PrivateRelay() {
   memset(_heard, 0, sizeof(_heard));
   _heard_seq = 0;
   _settings_state = SETTINGS_NONE;
+  memset(_types, 0, sizeof(_types));
 }
 
 void PrivateRelay::noteAdvert(const uint8_t* pub_key, const char* name) {
@@ -54,10 +55,22 @@ bool PrivateRelay::groupMacOk(const uint8_t* secret, const uint8_t* mac_and_data
 }
 
 bool PrivateRelay::allowForward(const mesh::Packet* pkt) {
-  if (!isActive()) return true;
-  mesh::PrivateVerdict v = mesh::privateRelayVerdict(pkt, _lists, groupMacOk);
-  if (v < mesh::PV_COUNT) _counts[v]++;
-  return mesh::privateVerdictForwards(v);
+  bool fwd = true;
+  if (isActive()) {
+    mesh::PrivateVerdict v = mesh::privateRelayVerdict(pkt, _lists, groupMacOk);
+    if (v < mesh::PV_COUNT) _counts[v]++;
+    fwd = mesh::privateVerdictForwards(v);
+  }
+  uint8_t t = pkt->getPayloadType() & 0x0F;
+  uint8_t first_hop = (pkt->isRouteFlood() && pkt->getPathHashCount() == 0) ? 1 : 0;
+  _types[t][first_hop][fwd ? 0 : 1]++;
+  return fwd;
+}
+
+static const char* typeName(int t) {
+  static const char* names[16] = {"req", "resp", "dm", "ack", "adv", "chan", "cdat", "anon",
+                                  "path", "trace", "multi", "ctrl", "t12", "t13", "t14", "raw"};
+  return names[t & 15];
 }
 
 void PrivateRelay::tick(uint16_t batt_mv) {
@@ -347,6 +360,7 @@ void PrivateRelay::handleCommand(const char* args, char* reply, FILESYSTEM* fs) 
     const char* s = skipSpaces(a + 5);
     if (startsWord(s, "reset")) {
       memset(_counts, 0, sizeof(_counts));
+      memset(_types, 0, sizeof(_types));
       strcpy(reply, "OK - counters reset");
       return;
     }
@@ -357,8 +371,24 @@ void PrivateRelay::handleCommand(const char* args, char* reply, FILESYSTEM* fs) 
                    (unsigned long)_counts[i]);
     }
     return;
+  } else if (startsWord(a, "types") || startsWord(a, "first")) {
+    // types: forwarded/blocked per kind of packet; first: of those, how many came straight from
+    // their sender (first hop) rather than through another repeater. Since boot or stats reset.
+    bool first = startsWord(a, "first");
+    int n = sprintf(reply, first ? "first-hop" : "fwd/blk");
+    for (int t = 0; t < 16 && n < 128; t++) {
+      uint32_t f = _types[t][0][0] + _types[t][1][0], b = _types[t][0][1] + _types[t][1][1];
+      if (f + b == 0) continue;
+      if (first) {
+        uint32_t o = _types[t][1][0] + _types[t][1][1];
+        n += sprintf(&reply[n], " %s %lu", typeName(t), (unsigned long)o);
+      } else {
+        n += sprintf(&reply[n], " %s %lu/%lu", typeName(t), (unsigned long)f, (unsigned long)b);
+      }
+    }
+    return;
   } else {
-    strcpy(reply, "Err - private [on [min]|off|auto <mV>|heard|approve <name|key>|remove <hex>|list|channel add <hex>|stats|air]");
+    strcpy(reply, "Err - private [on [min]|off|auto <mV>|heard|approve <name|key>|remove <hex>|list|channel add <hex>|stats|types|first|air]");
     return;
   }
 

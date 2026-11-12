@@ -23,6 +23,9 @@ class PrivateRelay {
   bool _auto_active;
   uint16_t _last_batt_mv;
   uint32_t _counts[mesh::PV_COUNT];
+  // Every packet that reaches the forwarding decision, public or private (11-11, Randy: how much
+  // goes through and what kind): [payload type][0 = relayed already, 1 = first hop][0 fwd, 1 drop]
+  uint32_t _types[16][2][2];
   PrivateRelaySettingsState _settings_state;
 
   // Radios recently heard by their (signature-checked) adverts, so an operator can approve one
